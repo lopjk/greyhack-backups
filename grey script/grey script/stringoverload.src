@@ -1,0 +1,34 @@
+string.menuTitle = function
+    defaultAmount = 15
+    defaultSymbol = "-"
+    border = (defaultSymbol * defaultAmount)
+    return border + char(10) + self + char(10) + border
+end function
+
+// solution = " gk's Menu".menuTitle
+// print solution
+
+// ------------------------------------------------------------
+
+red = function(someString) // classic function form of doing a color
+    openthing = "<color=red>"
+    closething = "</color>"
+    return openthing + someString + closething
+end function
+
+string.red = function // overloading form of doing a color
+    openthing = "<color=red>"
+    closething = "</color>"
+    return openthing + self + closething
+end function
+
+a = "Hello world!"
+// print red("Hello world!")
+print "H".red + "ello " + "w".red + "orld!"
+b = a.split(" ")
+c = []
+for each in b
+    result = each[0].red + each[1 : ]
+    c.push result
+end for
+print c.join(" ")

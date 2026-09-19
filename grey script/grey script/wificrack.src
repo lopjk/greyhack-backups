@@ -1,0 +1,148 @@
+// WiFi cracker - GreyScript safe
+// Usage:  wifi
+//         wifi -v          (list networks only)
+
+viewNets = function(bucket)
+	for net in bucket
+		print("bssid: " + net.bssid + " power " + net.pwr + " essid: " + net.essid)
+	end for
+end function
+
+alreadySaved = function(payload, targetBssid)
+	if not payload then return false
+	for row in payload.split(char(10))
+		if not row then continue
+		data = row.split("--")
+		if data.len < 1 then continue
+		if data[0] == targetBssid then return true
+	end for
+	return false
+end function
+
+ceilDiv = function(numerator, denominator)
+	if denominator == 0 then return 0
+	q = floor(numerator / denominator)
+	if q * denominator < numerator then q = q + 1
+	return q
+end function
+
+joinFrom = function(bits, startIdx)
+	out = ""
+	i = startIdx
+	while i < bits.len
+		if out.len > 0 then out = out + " "
+		out = out + bits[i]
+		i = i + 1
+	end while
+	return out
+end function
+
+cryptools = include_lib("/lib/crypto.so")
+if not cryptools then exit("Error: Missing crypto library")
+
+output = cryptools.airmon("start", "wlan0")
+if typeof(output) == "string" then exit("airmon: " + output)
+
+sh = get_shell
+computer = sh.host_computer
+devices = computer.network_devices
+if devices == null then exit("iwlist: Network device not found")
+
+networks = computer.wifi_networks("wlan0")
+if networks == null then exit(command_info("iwlist_usage"))
+if typeof(networks) == "string" then exit(networks)
+
+bucket = []
+for raw in networks
+	bits = raw.split(" ")
+	if bits.len < 3 then continue
+	entry = {}
+	entry.bssid = bits[0]
+	entry.pwr = bits[1]
+	entry.essid = joinFrom(bits, 2)
+	bucket.push(entry)
+end for
+
+if params.len == 1 then
+	if params[0] == "-v" then
+		viewNets(bucket)
+		exit
+	end if
+end if
+
+desktop = "/home/" + active_user + "/Desktop"
+wifiDir = desktop + "/wifi_folder"
+createResult = computer.create_folder(desktop, "wifi_folder")
+if typeof(createResult) == "string" then
+	print("Folder note: " + createResult)
+else
+	print("Folder created: " + wifiDir)
+end if
+
+passFile = computer.File(wifiDir + "/passwords")
+if not passFile then
+	computer.touch(wifiDir, "passwords")
+	passFile = computer.File(wifiDir + "/passwords")
+end if
+if not passFile then exit("Could not create " + wifiDir + "/passwords")
+
+MAX_ATTEMPTS = 2
+capPath = "/home/" + active_user + "/file.cap"
+
+for net in bucket
+	pwrStr = net.pwr.replace("%", "")
+	pwrValue = pwrStr.val
+	if pwrValue < 30 then continue
+
+	tempPayload = passFile.get_content
+	if alreadySaved(tempPayload, net.bssid) then continue
+
+	acksNeeded = ceilDiv(300000, pwrValue + 15) + 1
+	key = null
+	attempt = 1
+	while attempt <= MAX_ATTEMPTS
+		print("Attempt " + attempt + " for " + net.essid + " acks=" + acksNeeded)
+		result = cryptools.aireplay(net.bssid, net.essid, acksNeeded)
+		if typeof(result) == "string" then
+			print("aireplay: " + result)
+		end if
+
+		capFile = computer.File(capPath)
+		if not capFile then
+			print("aircrack: file.cap not found, skip " + net.essid)
+			break
+		end if
+		if not capFile.is_binary then
+			print("aircrack: not a valid filecap, skip " + net.essid)
+			break
+		end if
+		if not capFile.has_permission("r") then
+			print("aircrack: permission denied on file.cap")
+			break
+		end if
+
+		key = cryptools.aircrack(capPath)
+		if key then break
+
+		retryAcks = ceilDiv(acksNeeded * 15, 10)
+		minRetryAcks = ceilDiv(300000, pwrValue) + 1
+		if minRetryAcks > retryAcks then retryAcks = minRetryAcks
+		acksNeeded = retryAcks
+		attempt = attempt + 1
+	end while
+
+	if key then
+		existing = passFile.get_content
+		if not existing then existing = ""
+		passFile.set_content(existing + net.bssid + "--" + net.essid + "--" + key + char(10))
+		print("KEY FOUND! [<color=#FF0000>" + key + "</color>]")
+		connectResult = computer.connect_wifi("wlan0", net.bssid, net.essid, key)
+		if typeof(connectResult) == "string" then
+			print("connect_wifi error: " + connectResult)
+		else
+			print("Connected to " + net.essid + " successfully!")
+		end if
+	else
+		print("aircrack: no key for " + net.essid + " after " + MAX_ATTEMPTS + " attempts")
+	end if
+end for

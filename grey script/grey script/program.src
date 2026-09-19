@@ -1,0 +1,9 @@
+clear_screen
+choice = user_input("What is your sentance? ")
+if not choice then exit
+size = choice.len - 1
+result = []
+for each in range(size,0,-1)
+    result.push(choice[each])
+end for
+print result.join("")
