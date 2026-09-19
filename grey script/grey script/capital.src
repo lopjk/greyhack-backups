@@ -1,3 +1,0 @@
-metax = include_lib("/lib/metaxploit.so")
-
-metax.rshell_client("1.1.1.1", 1222, "snake")
