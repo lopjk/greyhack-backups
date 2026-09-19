@@ -1,0 +1,407 @@
+// ============================================================
+//  AutoPwn Suite  v5
+//  Usage:  autopwn [target_ip]
+//          autopwn [target_ip] [dest_bank_account]
+//
+//  Set DEST_BANK once. Every cracked Bank.txt login will
+//  send ALL funds to that account.
+// ============================================================
+
+EXFIL_IP   = "198.164.115.102"
+EXFIL_PORT = 22
+EXFIL_USER = "root"
+EXFIL_PASS = "Fehackar"
+
+// Your destination bank account (set once). Example: "310582941"
+// Leave "" to auto-use this PC's user_bank_number, or pass it
+// as the 2nd command-line argument.
+DEST_BANK  = ""
+
+RED    = "<color=#ff4444>"
+GREEN  = "<color=#44ff44>"
+CYAN   = "<color=#44ffff>"
+YELLOW = "<color=#ffcc00>"
+GREY   = "<color=#aaaaaa>"
+RST    = "</color>"
+
+if params.len < 1 then
+    exit("<b>Usage: " + program_path.split("/")[-1] + " [target_ip]  [optional dest_bank]</b>")
+end if
+
+TARGET_IP = params[0]
+myShell = get_shell
+myComp  = myShell.host_computer
+localHome = home_dir
+
+if params.len >= 2 then
+    DEST_BANK = params[1].trim
+end if
+if DEST_BANK.len == 0 then
+    autoBank = user_bank_number
+    if autoBank then DEST_BANK = str(autoBank)
+end if
+if DEST_BANK.len == 0 then
+    print(YELLOW + "[!] DEST_BANK is empty. Put your account number at the top of the source." + RST)
+    print(YELLOW + "    Or run:  autopwn [target_ip] [your_bank_account]" + RST)
+end if
+
+if EXFIL_USER == "root" then
+    exfilHome = "/root"
+else
+    exfilHome = "/home/" + EXFIL_USER
+end if
+
+metax = include_lib("/lib/metaxploit.so")
+if not metax then metax = include_lib(current_path + "/metaxploit.so")
+if not metax then exit(RED + "Error: metaxploit.so not found" + RST)
+
+crypto = include_lib("/lib/crypto.so")
+if not crypto then crypto = include_lib(current_path + "/crypto.so")
+if not crypto then exit(RED + "Error: crypto.so not found" + RST)
+
+print(GREEN + "[+] Libraries loaded OK" + RST)
+
+gotShell = function(obj)
+    return typeof(obj) == "shell"
+end function
+
+gotComputer = function(obj)
+    t = typeof(obj)
+    return t == "computer" or t == "shell"
+end function
+
+asComputer = function(obj)
+    t = typeof(obj)
+    if t == "computer" then return obj
+    if t == "shell" then return obj.host_computer
+    return null
+end function
+
+sshConnect = function(ip, port, user, pass)
+    print(CYAN + "[*] SSH " + user + "@" + ip + ":" + str(port) + RST)
+    result = myShell.connect_service(ip, port, user, pass, "ssh")
+    t = typeof(result)
+    print(GREY + "    typeof=" + t + RST)
+    if t == "shell" then return result
+    result2 = myShell.connect_service(ip, port, user, pass)
+    t2 = typeof(result2)
+    print(GREY + "    retry typeof=" + t2 + RST)
+    if t2 == "shell" then return result2
+    print(RED + "[-] SSH failed: " + str(result) + RST)
+    return null
+end function
+
+writeLocal = function(fileName, content)
+    path = localHome + "/" + fileName
+    f = myComp.File(path)
+    if not f then
+        myComp.touch(localHome, fileName)
+        f = myComp.File(path)
+    end if
+    if f then
+        f.set_content(content)
+        print(GREEN + "[+] Local: " + path + RST)
+        return path
+    end if
+    print(RED + "[-] Local write failed: " + path + RST)
+    return null
+end function
+
+isValidIp = function(str)
+    parts = str.split(".")
+    if parts.len != 4 then return false
+    for p in parts
+        n = p.to_int
+        if n == null then return false
+        if n < 0 or n > 255 then return false
+    end for
+    return true
+end function
+
+scanAndExploit = function(targetIp)
+    print(CYAN + "[*] Connecting to " + targetIp + "..." + RST)
+    netSession = metax.net_use(targetIp)
+    if not netSession then
+        print(RED + "[-] net_use failed on " + targetIp + RST)
+        return null
+    end if
+    metaLib = netSession.dump_lib
+    if not metaLib then
+        print(RED + "[-] Could not dump library from " + targetIp + RST)
+        return null
+    end if
+    print(CYAN + "[*] Library: " + metaLib.lib_name + "  v" + metaLib.version + RST)
+    addresses = metax.scan(metaLib)
+    if not addresses or addresses.len == 0 then
+        print(YELLOW + "[!] No addresses found on " + targetIp + RST)
+        return null
+    end if
+    for addr in addresses
+        scanResult = metax.scan_address(metaLib, addr)
+        if not scanResult then continue
+        chunks = scanResult.split("Unsafe")
+        if chunks.len < 2 then continue
+        for chunk in chunks[1:]
+            oTag = chunk.indexOf("<b>")
+            cTag = chunk.indexOf("</b>")
+            if oTag < 0 or cTag < 0 then continue
+            funcName = chunk[oTag + 3 : cTag]
+            if funcName.len == 0 then continue
+            print(CYAN + "[*] Overflow: " + addr + " -> " + funcName + RST)
+            result = metaLib.overflow(addr, funcName)
+            rType = typeof(result)
+            if rType == "computer" then
+                print(GREEN + "[+] Got COMPUTER on " + targetIp + RST)
+                return result
+            else if rType == "shell" then
+                print(GREEN + "[+] Got SHELL on " + targetIp + RST)
+                return result.host_computer
+            end if
+        end for
+    end for
+    print(RED + "[-] All exploits exhausted on " + targetIp + RST)
+    return null
+end function
+
+crackPasswd = function(remoteComp)
+    results = []
+    f = remoteComp.File("/etc/passwd")
+    if not f then
+        print(YELLOW + "[!] /etc/passwd not found" + RST)
+        return results
+    end if
+    if not f.has_permission("r") then
+        print(RED + "[-] No read permission on /etc/passwd" + RST)
+        return results
+    end if
+    lines = f.get_content.split(char(10))
+    print(CYAN + "[*] Cracking " + lines.len + " passwd entries..." + RST)
+    for line in lines
+        if line.len < 3 then continue
+        parts = line.split(":")
+        if parts.len < 2 then continue
+        username = parts[0]
+        hashVal = parts[1]
+        if hashVal == "x" or hashVal == "*" or hashVal == "!" or hashVal == "" then continue
+        password = crypto.decipher(hashVal)
+        results.push({"user": username, "hash": hashVal, "pass": password})
+        if password then
+            print(GREEN + "[+] CRACKED  " + username + "  ->  " + password + RST)
+        else
+            print(YELLOW + "[-] No crack: " + username + "  (" + hashVal + ")" + RST)
+        end if
+    end for
+    return results
+end function
+
+crackBankConfigs = function(remoteComp)
+    bankCreds = []
+    paths = []
+    homeFolder = remoteComp.File("/home")
+    if homeFolder then
+        for userDir in homeFolder.get_folders
+            paths.push("/home/" + userDir.name + "/Config/Bank.txt")
+            paths.push("/home/" + userDir.name + "/Config/Mail.txt")
+        end for
+    end if
+    paths.push("/root/Config/Bank.txt")
+    paths.push("/root/Config/Mail.txt")
+    for cfgPath in paths
+        cfgFile = remoteComp.File(cfgPath)
+        if not cfgFile then continue
+        if not cfgFile.has_permission("r") then continue
+        configName = "Mail"
+        if cfgPath.indexOf("Bank") >= 0 then configName = "Bank"
+        parts = cfgFile.get_content.split(":")
+        if parts.len < 2 then continue
+        bankUser = parts[0].trim
+        bankHash = parts[1].trim
+        bankIp = ""
+        if parts.len >= 3 then bankIp = parts[2].trim
+        bankPass = crypto.decipher(bankHash)
+        bankCreds.push({"config": configName, "bank_user": bankUser, "bank_hash": bankHash, "bank_pass": bankPass, "bank_ip": bankIp, "path": cfgPath})
+        if bankPass then
+            print(GREEN + "[+] [" + configName + "] " + bankUser + " : " + bankPass + RST)
+        else
+            print(YELLOW + "[-] Uncracked " + configName + " for " + bankUser + RST)
+        end if
+    end for
+    return bankCreds
+end function
+
+loadPool = function()
+    pool = []
+    f = myComp.File(localHome + "/npc_bank_pool.txt")
+    if not f then return pool
+    if not f.has_permission("r") then return pool
+    for line in f.get_content.split(char(10))
+        line = line.trim
+        if line.len < 3 then continue
+        if line.indexOf(":") < 0 then continue
+        parts = line.split(":")
+        if parts.len < 2 then continue
+        acct = parts[0].trim
+        pass = parts[1].trim
+        if acct.len == 0 or pass.len == 0 then continue
+        pool.push({"acct": acct, "pass": pass})
+    end for
+    print(CYAN + "[*] Loaded " + pool.len + " NPC accounts from pool" + RST)
+    return pool
+end function
+
+savePool = function(pool)
+    dump = ""
+    seen = []
+    for e in pool
+        if seen.indexOf(e.acct) != null then continue
+        seen.push(e.acct)
+        dump = dump + e.acct + ":" + e.pass + char(10)
+    end for
+    writeLocal("npc_bank_pool.txt", dump)
+end function
+
+buildJobs = function(bankCreds)
+    pool = loadPool()
+    for b in bankCreds
+        if b.config != "Bank" then continue
+        if not b.bank_pass then continue
+        already = false
+        for e in pool
+            if e.acct == b.bank_user then already = true
+        end for
+        if not already then pool.push({"acct": b.bank_user, "pass": b.bank_pass})
+    end for
+    savePool(pool)
+
+    destAcct = DEST_BANK
+    jobs = []
+    jobText = "=== BANK TRANSFER JOBS  " + TARGET_IP + " ===" + char(10)
+    jobText = jobText + "DESTINATION ACCOUNT: " + destAcct + char(10)
+    jobText = jobText + "Open Browser.exe -> Bank website. For each job:" + char(10)
+    jobText = jobText + "  Login FROM + PASS, Transfer ALL to DEST." + char(10)
+
+    if destAcct.len == 0 then
+        print(RED + "[-] No destination account set. Jobs will list logins only." + RST)
+    else
+        print(CYAN + "[*] All transfers go to: " + destAcct + RST)
+    end if
+
+    for b in bankCreds
+        if b.config != "Bank" then continue
+        if not b.bank_pass then continue
+        jobs.push({"from": b.bank_user, "pass": b.bank_pass, "to": destAcct})
+        print("")
+        print(GREEN + "[JOB] LOGIN  " + b.bank_user + RST)
+        print(GREEN + "      PASS   " + b.bank_pass + RST)
+        if destAcct.len > 0 then
+            print(GREEN + "      SEND ALL TO  " + destAcct + RST)
+        else
+            print(YELLOW + "      DEST not set" + RST)
+        end if
+        jobText = jobText + char(10) + "FROM: " + b.bank_user + char(10)
+        jobText = jobText + "PASS: " + b.bank_pass + char(10)
+        jobText = jobText + "TO:   " + destAcct + char(10)
+    end for
+
+    if jobs.len == 0 then
+        print(YELLOW + "[!] No cracked Bank.txt logins." + RST)
+    else
+        print(CYAN + "[*] " + jobs.len + " job(s) -> " + destAcct + RST)
+    end if
+    writeLocal("bank_jobs.txt", jobText)
+    return {"jobs": jobs, "pool": pool, "text": jobText}
+end function
+
+exfilText = function(fileName, content)
+    remote = sshConnect(EXFIL_IP, EXFIL_PORT, EXFIL_USER, EXFIL_PASS)
+    if not gotShell(remote) then
+        print(YELLOW + "[!] SSH exfil skipped. Files stay in " + localHome + RST)
+        return
+    end if
+    exfilComp = asComputer(remote)
+    if not exfilComp then
+        print(RED + "[-] SSH object had no computer. Skipping exfil." + RST)
+        return
+    end if
+    destPath = exfilHome + "/" + fileName
+    exfilFile = exfilComp.File(destPath)
+    if not exfilFile then
+        touched = exfilComp.touch(exfilHome, fileName)
+        print(GREY + "    touch " + destPath + " -> " + str(touched) + RST)
+        exfilFile = exfilComp.File(destPath)
+    end if
+    if not exfilFile then
+        destPath2 = "/home/" + EXFIL_USER + "/" + fileName
+        exfilComp.touch("/home/" + EXFIL_USER, fileName)
+        exfilFile = exfilComp.File(destPath2)
+        if exfilFile then destPath = destPath2
+    end if
+    if not exfilFile then
+        print(RED + "[-] Could not create " + fileName + " on exfil" + RST)
+        return
+    end if
+    prev = ""
+    if exfilFile.has_permission("r") then prev = exfilFile.get_content
+    exfilFile.set_content(prev + char(10) + content)
+    print(GREEN + "[+] Exfil -> " + EXFIL_IP + ":" + destPath + RST)
+end function
+
+print("")
+print(CYAN + "============================================" + RST)
+print(CYAN + "  AutoPwn v5  target: " + TARGET_IP + RST)
+print(CYAN + "  dest bank: " + DEST_BANK + RST)
+print(CYAN + "  exfil: " + EXFIL_USER + "@" + EXFIL_IP + ":" + str(EXFIL_PORT) + RST)
+print(CYAN + "============================================" + RST)
+print("")
+
+print(CYAN + "[STEP 1] Exploiting target..." + RST)
+remoteComp = scanAndExploit(TARGET_IP)
+if not remoteComp then exit(RED + "Could not compromise target. Exiting." + RST)
+
+print("")
+print(CYAN + "[STEP 2] Cracking /etc/passwd..." + RST)
+passwdCreds = crackPasswd(remoteComp)
+
+print("")
+print(CYAN + "[STEP 3] Cracking Bank.txt / Mail.txt..." + RST)
+bankCreds = crackBankConfigs(remoteComp)
+
+print("")
+print(CYAN + "[STEP 4] Bank transfer jobs -> " + DEST_BANK + "..." + RST)
+built = buildJobs(bankCreds)
+
+dump = "=== PASSWD (" + TARGET_IP + ") ===" + char(10)
+for e in passwdCreds
+    if e.pass then
+        dump = dump + e.user + ":" + e.pass + char(10)
+    else
+        dump = dump + e.user + ":[uncracked] " + e.hash + char(10)
+    end if
+end for
+dump = dump + char(10) + "=== BANK / MAIL ===" + char(10)
+for b in bankCreds
+    line = "[" + b.config + "] " + b.bank_user
+    if b.bank_pass then line = line + ":" + b.bank_pass
+    dump = dump + line + char(10)
+end for
+dump = dump + char(10) + built.text
+
+writeLocal("cred_dump.txt", dump)
+writeLocal("stolen_" + TARGET_IP.replace(".", "_") + ".txt", dump)
+
+print("")
+print(CYAN + "[STEP 5] Exfil (safe SSH)..." + RST)
+exfilText("stolen_banks.txt", dump)
+
+poolDump = ""
+for e in built.pool
+    poolDump = poolDump + e.acct + ":" + e.pass + char(10)
+end for
+exfilText("npc_bank_pool.txt", poolDump)
+exfilText("bank_jobs.txt", built.text)
+
+print("")
+print(GREEN + "============================================" + RST)
+print(GREEN + "  Local files in " + localHome + RST)
+print(GREEN + "  bank_jobs.txt  cred_dump.txt  npc_bank_pool.txt" + RST)
+print(GREEN + "============================================" + RST)

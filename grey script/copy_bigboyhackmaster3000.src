@@ -1,0 +1,170 @@
+Corrupt_Logs = function(obj)
+
+	comp = (obj)
+	if typeof(comp) == "shell" then comp = obj.host_computer
+	if typeof(comp) != "computer" then return 
+	folder = comp.File("/home/guest")
+	if not folder then return print("failed to corruptlogs: no guest folder")
+	test = comp.touch(folder.path, "fake.txt")
+	if typeof(test) == "string" then return print(test)
+	targetfolder = comp.File("/var")
+	if not targetfolder then return print("failed to corrupt: no var folder")
+	file = comp.File("/home/guest/fake.txt")
+	file.move "/var", "system.log"
+	file = comp.File("/home/guest/fake.txt")
+	if not file then
+		return print("system logs corrupted ")
+	else
+		return print("system logs failed to corrupt do it yourself")
+
+
+	end if
+
+end function
+
+
+Check_Root = function(obj)
+	comp = (obj)
+	if typeof(comp) == "shell" then comp = obj.host_computer
+	if typeof(comp) != "computer" then return 
+	file = comp.File("/")
+	if not file then return 
+	filelist = file.get_folders + file.get_files
+	newlist = []
+	while filelist.len > 0
+		f = filelist.pull
+		if f.is_folder then filelist = filelist + f.get_folders + f.get_files
+		newlist.push f
+	end while
+	for item in newlist
+		if not item.has_permission("w") then return "user"
+
+
+	end for
+	return "root"
+
+end function
+
+
+programName = program_path.split("/")[-1]
+corrupt = false
+
+
+
+// entry point
+
+
+currentPath = program_path.split("/")[ : -1].join("/")
+crypto = include_lib("/lib/crypto.so")
+if not crypto then crypto = include_lib(currentPath + "/crypto.so")
+if not crypto then exit("error crypto.so not found")
+metax = include_lib("/lib/metaxploit.so")
+if not metax then metax = include_lib(currentPath + "/metaxploit.so")
+
+if not metax then exit("errot:  " + programName + "no metasploit.so")
+
+usage = "usage: " + programName + " [target ip] [port] " + char(10) + "usage: " + programName + " [-r] [target ip] [port] " + char(10) + "usage: " + programName + " [-m] [target ip] [port]"
+
+
+
+
+if params.len < 1 then exit(usage)
+command = params[0]
+
+if params.len == 3 and command == "-r" then
+
+	ip = params[1]
+	port = params[2].to_int
+else if params.len == 3 and command == "-m" then
+
+	ip = params[1]
+	port = params[2].to_int
+
+else
+	ip = params[0]
+	port = params[1].to_int
+end if
+
+programName = program_path.split("/")[-1]
+corrupt = false
+
+input = ""
+while input != "y" and input != "n"
+	input = user_input("Do you want to corrupt the logs (y/n): ")
+	if input == "y" then corrupt = true
+
+
+end while
+
+
+netSession = metax.net_use(ip, port)
+if not netSession then exit ("error:  " + programName + "no net session")
+
+metalib = netSession.dump_lib
+if not metalib then exit ("error:  " + programName + "no metalib")
+mems = metax.scan(metalib)
+for mem in mems
+	vulns = metax.scan_address(metalib, mem)
+	vulns = vulns.split("Unsafe check: ")
+	for vuln in vulns
+		if vuln == vulns[0] then continue
+		vuln = vuln[vuln.indexOf("<b>") + 3 : vuln.indexOf("</b>")]
+		object = metalib.overflow(mem, vuln)
+		if (typeof(object) == "shell" or typeof(object) == "computer") and corrupt then Corrupt_Logs(object)
+
+
+
+
+		print "<color=#4f77da>" + typeof(object) + char(10) + "<color=#00FF66>" + mem + " " + vuln + char(10)
+
+
+		if command == "-r" then
+			if typeof(object) == "shell" and Check_Root(object) then object.launch("/bin/bash")
+		else if command == "-m" then
+			if typeof(object) == "computer" then
+				homefolder = object.File("/home")
+				if not homefolder then continue
+				userfolders = homefolder.get_folders
+				filelist = []
+				for user in userfolders
+					file = object.File("/home" + "/" + user.name + "/Config/Mail.txt")
+
+					if not file then continue
+					content = file.get_content
+					items = content.split(char(10))
+
+					for item in items
+						filelist.push item
+
+
+
+
+					end for
+
+
+				end for
+				output = []
+				for item in filelist
+					this = item.split(":")
+					output.push this[0] + " " + crypto.decipher(this[1])
+
+				end for
+				if output.len > 0 then
+					clear_screen
+
+					for item in output
+						print item
+					end for
+					exit
+				end if
+			end if
+
+
+		end if
+
+
+
+
+	end for
+
+end for
