@@ -1,0 +1,40 @@
+//this program was made by TaxEvader
+user_hello = user_input("Hello, would you like to (1) encrypt or (2) decrypt?: ")
+
+
+if user_hello == "1" then
+    user_msg = user_input("Please add your message to encrypt: ")
+    encrypted_msg = ""
+   
+    for i in range(0, user_msg.len - 1)
+        current_char = user_msg[i]
+        ascii_code = code(current_char)
+        new_char = char(ascii_code + 3)
+        encrypted_msg = encrypted_msg + new_char
+    end for
+   
+    wait(1)
+    print("Encrypted message: " + encrypted_msg)
+
+
+else if user_hello == "2" then
+    user_msg = user_input("Please add your message to decrypt: ")
+    decrypted_msg = ""
+   
+    for i in range(0, user_msg.len - 1)
+        current_char = user_msg[i]
+        ascii_code = code(current_char)
+        new_char = char(ascii_code - 3)
+        decrypted_msg = decrypted_msg + new_char
+    end for
+   
+    wait(1)
+    print("Decrypted message: " + decrypted_msg)
+
+
+else
+    print("Invalid choice. Please enter 1 or 2.")
+end if
+
+
+
